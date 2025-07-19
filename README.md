@@ -17,7 +17,9 @@ install these specific packages:
 2. `npm install lucide-react`
 3. `npm install -D tailwindcss postcss autoprefixer`
 4. `npx tailwindcss init -p`
+
 5. `npm install -g vite`
 6. `npm install -g npm`
-7. `npm install -g npm`
-8. `npm install react@18 react-dom@18 leaflet@1.9 react-leaflet@4`
+7. `npm install`
+8. `npm uninstall react react-dom leaflet react-leaflet`
+9. `npm install react@18 react-dom@18 leaflet@1.9 react-leaflet@4`
