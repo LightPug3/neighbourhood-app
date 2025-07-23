@@ -29,3 +29,4 @@ ssh-key-2025-04-14.key
 backend/venv
 .env.local
 .env
+backup_20250723_020435.sql
