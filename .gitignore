@@ -22,4 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+
+# other files
 ssh-key-2025-04-14.key
+backend/venv
+.env.local
+.env
