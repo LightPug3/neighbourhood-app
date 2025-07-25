@@ -11,7 +11,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for React frontend
+# CORS(app)  # Enable CORS for React frontend
+
+# Configure Flask for production
+app.config['ENV'] = os.getenv('FLASK_ENV', 'production')
+app.config['DEBUG'] = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+
+# Configure CORS for production
+if app.config['ENV'] == 'production':
+    # Restrict CORS to your domain in production
+    CORS(app, origins=['https://neighbourhood-app.duckdns.org'])
+else:
+    # Allow all origins in development
+    CORS(app)
+
 
 # Initialize database
 create_tables()
@@ -179,4 +192,10 @@ def get_last_update_time():
         return None
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000, debug=False)
+#    app.run(host='0.0.0.0', port=5000, debug=False)
+    if app.config['ENV'] == 'development':
+        app.run(host='0.0.0.0', port=5000, debug=True)
+    else:
+        # In production, this won't be called (Gunicorn handles it)
+        print("Production mode: Use Gunicorn to serve this application")
+        print("Example: gunicorn --config gunicorn.conf.py app:app")
