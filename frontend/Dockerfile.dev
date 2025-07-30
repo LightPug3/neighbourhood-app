@@ -1,13 +1,11 @@
-# Frontend Dockerfile-dev
+# Development Frontend Dockerfile
 FROM node:18-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Install dependencies first (for better caching)
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
 # Copy source code
@@ -16,5 +14,5 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Start development server
+# Start development server with hot reload
 CMD ["npm", "run", "dev"]

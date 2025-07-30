@@ -8,3 +8,6 @@ APScheduler==3.10.4
 python-dotenv==1.0.0
 cryptography==41.0.7
 gunicorn==21.2.0
+axios
+werkzeug
+PYJWT==2.8.0

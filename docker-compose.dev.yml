@@ -1,69 +1,79 @@
-#version: '3.8'
+version: '3.8'
 
 services:
   # MySQL Database
   mysql:
     image: mysql:8.0
-    container_name: neighbourhood_mysql
+    container_name: neighbourhood_mysql_dev
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
-      MYSQL_DATABASE: ${DB_NAME}
-      MYSQL_USER: ${DB_USER}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devpassword}
+      MYSQL_DATABASE: ${DB_NAME:-neighbourhood}
+      MYSQL_USER: ${DB_USER:-neighbourhood_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-devpassword123}
     ports:
-      - "3307:3306"
+      - "3307:3306"  # Avoid conflicts with local MySQL
     volumes:
-      - mysql_data:/var/lib/mysql
+      - mysql_dev_data:/var/lib/mysql
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
       retries: 10
+    networks:
+      - neighbourhood_dev_network
 
   # Backend API
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
-    container_name: neighbourhood_backend
+    container_name: neighbourhood_backend_dev
     restart: unless-stopped
     environment:
-      - DB_HOST=${DB_HOST:-mysql}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - API_USERNAME=${API_USERNAME}
-      - API_PASSWORD=${API_PASSWORD}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+      - DB_HOST=mysql
+      - DB_USER=${DB_USER:-neighbourhood_user}
+      - DB_PASSWORD=${DB_PASSWORD:-devpassword123}
+      - DB_NAME=${DB_NAME:-neighbourhood}
+      - API_USERNAME=${API_USERNAME:-}
+      - API_PASSWORD=${API_PASSWORD:-}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
       - FLASK_ENV=development
+      - FLASK_DEBUG=True
     ports:
-      - "5001:5000"
+      - "5000:5000"  # Avoid conflicts with local services
     volumes:
       - ./backend:/app
+      - backend_cache:/app/__pycache__
     depends_on:
       mysql:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    networks:
+      - neighbourhood_dev_network
 
   # Frontend
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
-    container_name: neighbourhood_frontend
+    container_name: neighbourhood_frontend_dev
     restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:5000
     ports:
-      - "3001:3000"
+      - "3000:3000"  # Avoid conflicts with local services
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - /app/node_modules  # Anonymous volume for node_modules
     depends_on:
       - backend
+    networks:
+      - neighbourhood_dev_network
 
 volumes:
-  mysql_data:
+  mysql_dev_data:
+  backend_cache:
+
+networks:
+  neighbourhood_dev_network:
+    driver: bridge
