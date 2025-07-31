@@ -53,7 +53,9 @@ services:
       retries: 3
     networks:
       - neighbourhood_network
-
+    env_file:
+      - .env
+      
 volumes:
   mysql_data:
 

@@ -1,74 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Filter, X, DollarSign, Clock, Wifi, WifiOff, AlertTriangle, CheckCircle, RefreshCw } from 'lucide-react';
 
-// Leaflet imports - Load via CDN with better error handling and caching
+// Leaflet imports - these would normally be imported but we'll load them via CDN
 const loadLeaflet = () => {
-  return new Promise((resolve, reject) => {
-    // Check if already loaded
-    if (window.L && window.L.map) {
-      console.log('Leaflet already loaded');
+  return new Promise((resolve) => {
+    if (window.L) {
       resolve(window.L);
       return;
     }
-    
-    console.log('Loading Leaflet...');
-    
-    // Remove any existing Leaflet elements to prevent conflicts
-    const existingCSS = document.querySelector('link[href*="leaflet"]');
-    const existingJS = document.querySelector('script[src*="leaflet"]');
     
     // Load Leaflet CSS
     const cssLink = document.createElement('link');
     cssLink.rel = 'stylesheet';
     cssLink.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css';
-    cssLink.integrity = 'sha512-puBpdR0798OZvTTbP4A8Ix/l+A4dHDD0DGqYW6RQ+9jxkRFclaxxQb/SJAWZfWAkuyeQUytO7+7N4QKrDh+drA==';
-    cssLink.crossOrigin = 'anonymous';
-    cssLink.onload = () => console.log('Leaflet CSS loaded');
-    cssLink.onerror = () => {
-      console.error('Failed to load Leaflet CSS');
-      reject(new Error('Failed to load Leaflet CSS'));
-    };
-    
-    if (!existingCSS) {
-      document.head.appendChild(cssLink);
-    }
+    document.head.appendChild(cssLink);
     
     // Load Leaflet JS
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';
-    script.integrity = 'sha512-GdwKLAUnp2BkHSS15+9oF1NaS2w7KQZgHNiVOjQqWYOOy+7IlPNbGdcr3/8hfoxtYWR4f9SaPcWh2K7Kqe4wCA==';
-    script.crossOrigin = 'anonymous';
-    script.async = false; // Load synchronously to avoid race conditions
-    
-    script.onload = () => {
-      console.log('Leaflet JS loaded');
-      // Wait a bit to ensure everything is initialized
-      setTimeout(() => {
-        if (window.L && window.L.map) {
-          resolve(window.L);
-        } else {
-          reject(new Error('Leaflet loaded but not properly initialized'));
-        }
-      }, 100);
-    };
-    
-    script.onerror = () => {
-      console.error('Failed to load Leaflet JS');
-      reject(new Error('Failed to load Leaflet JS'));
-    };
-    
-    if (!existingJS) {
-      document.head.appendChild(script);
-    } else {
-      // If script exists but window.L doesn't, try again
-      setTimeout(() => {
-        if (window.L) {
-          resolve(window.L);
-        } else {
-          reject(new Error('Leaflet script exists but not loaded'));
-        }
-      }, 100);
-    }
+    script.onload = () => resolve(window.L);
+    document.head.appendChild(script);
   });
 };
 
@@ -116,22 +67,15 @@ const App = () => {
     return ''; // Use relative URLs in production
   };
 
-  // Fetch ATMs from backend API with better error handling
+  // Fetch ATMs from backend API
   const fetchATMs = async () => {
     try {
       setRefreshing(true);
       const apiBaseUrl = getApiBaseUrl();
-      
-      // Add cache-busting parameter
-      const cacheBuster = `?t=${Date.now()}`;
-      
-      const response = await fetch(`${apiBaseUrl}/api/atms${cacheBuster}`, {
+      const response = await fetch(`${apiBaseUrl}/api/atms`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
         },
       });
       
@@ -140,8 +84,6 @@ const App = () => {
       }
       
       const data = await response.json();
-      console.log(`Fetched ${data.length} ATMs from API`);
-      
       setAtms(data);
       setError(null);
       
@@ -196,178 +138,52 @@ const App = () => {
     return R * c;
   };
 
-  // Initialize Leaflet map with better error handling
+  // Initialize Leaflet map
   useEffect(() => {
-    let mounted = true;
-    
-    const initializeMap = async () => {
-      try {
-        console.log('Initializing map...');
-        const L = await loadLeaflet();
+    loadLeaflet().then((L) => {
+      leafletRef.current = L;
+      if (mapRef.current && !leafletMapRef.current) {
+        // Initialize the map
+        leafletMapRef.current = L.map(mapRef.current, {
+          zoomControl: false  // This removes the zoom buttons
+        }).setView([ST_ANDREW_CENTER.lat, ST_ANDREW_CENTER.lng], 12);        
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(leafletMapRef.current);
         
-        if (!mounted) return; // Component unmounted
-        
-        leafletRef.current = L;
-        
-        if (mapRef.current && !leafletMapRef.current) {
-          console.log('Creating Leaflet map instance...');
-          
-          // Clear any existing map content
-          mapRef.current.innerHTML = '';
-          
-          // Initialize the map with retry logic
-          let retryCount = 0;
-          const maxRetries = 3;
-          
-          const createMap = () => {
-            try {
-              leafletMapRef.current = L.map(mapRef.current, {
-                zoomControl: false,
-                attributionControl: true,
-                preferCanvas: true // Better performance
-              }).setView([ST_ANDREW_CENTER.lat, ST_ANDREW_CENTER.lng], 12);
-              
-              // Add OpenStreetMap tiles with error handling
-              const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors',
-                maxZoom: 19,
-                errorTileUrl: '', // Don't show broken tile images
-              });
-              
-              tileLayer.on('tileerror', (e) => {
-                console.warn('Tile loading error:', e);
-              });
-              
-              tileLayer.addTo(leafletMapRef.current);
-              
-              // Map ready event
-              leafletMapRef.current.whenReady(() => {
-                console.log('Map is ready');
-                setMapLoaded(true);
-              });
-              
-              // Handle map load errors
-              leafletMapRef.current.on('baselayerchange', () => {
-                console.log('Base layer changed');
-              });
-              
-              console.log('Map created successfully');
-              
-            } catch (error) {
-              console.error('Error creating map:', error);
-              retryCount++;
-              
-              if (retryCount < maxRetries) {
-                console.log(`Retrying map creation (${retryCount}/${maxRetries})...`);
-                setTimeout(createMap, 1000 * retryCount);
-              } else {
-                console.error('Failed to create map after', maxRetries, 'attempts');
-                setError('Failed to load map. Please refresh the page.');
-              }
-            }
-          };
-          
-          createMap();
-        } else if (leafletMapRef.current) {
-          console.log('Map already exists, marking as loaded');
-          setMapLoaded(true);
-        }
-        
-      } catch (error) {
-        console.error('Error loading Leaflet:', error);
-        if (mounted) {
-          setError('Failed to load map library. Please refresh the page.');
-        }
+        setMapLoaded(true);
       }
-    };
-
-    // Add a small delay to ensure DOM is fully ready
-    const timer = setTimeout(initializeMap, 200);
+    });
 
     return () => {
-      mounted = false;
-      clearTimeout(timer);
       if (leafletMapRef.current) {
-        try {
-          leafletMapRef.current.remove();
-          leafletMapRef.current = null;
-          console.log('Map cleaned up');
-        } catch (e) {
-          console.warn('Error cleaning up map:', e);
-        }
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
       }
     };
   }, []);
 
-  // Get user location (client-side only)
+  // Get user location
   useEffect(() => {
-    // Ensure this only runs in the browser, not on server
-    if (typeof window === 'undefined') return;
-    
-    const getUserLocation = () => {
-      // Check if geolocation is available and in secure context
-      const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost';
-      
-      if (!isSecureContext) {
-        const errorMessage = 'Geolocation requires HTTPS. Please access the app via https://neighbourhood-app.duckdns.org';
-        console.warn(errorMessage);
-        setLocationError(errorMessage);
-        setUserLocation(ST_ANDREW_CENTER);
-        return;
-      }
-      
-      if ('geolocation' in navigator) {
-        // Request location with high accuracy and timeout
-        const options = {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 60000 // Cache for 1 minute
-        };
-        
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const userLat = position.coords.latitude;
-            const userLng = position.coords.longitude;
-            
-            console.log(`User location detected: ${userLat}, ${userLng}`);
-            
-            setUserLocation({
-              lat: userLat,
-              lng: userLng
-            });
-            setLocationError(null);
-          },
-          (error) => {
-            console.warn('Geolocation error:', error.message);
-            let errorMessage = 'Unable to get your location';
-            
-            switch(error.code) {
-              case error.PERMISSION_DENIED:
-                errorMessage = 'Location access denied. Using default location.';
-                break;
-              case error.POSITION_UNAVAILABLE:
-                errorMessage = 'Location information unavailable. Using default location.';
-                break;
-              case error.TIMEOUT:
-                errorMessage = 'Location request timed out. Using default location.';
-                break;
-            }
-            
-            setLocationError(errorMessage);
-            setUserLocation(ST_ANDREW_CENTER);
-          },
-          options
-        );
-      } else {
-        setLocationError('Geolocation not supported by this browser');
-        setUserLocation(ST_ANDREW_CENTER);
-      }
-    };
-    
-    // Add a small delay to ensure DOM is ready
-    const timer = setTimeout(getUserLocation, 100);
-    
-    return () => clearTimeout(timer);
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+          setLocationError(null);
+        },
+        (error) => {
+          setLocationError(error.message);
+          setUserLocation(ST_ANDREW_CENTER);
+        }
+      );
+    } else {
+      setLocationError('Geolocation not supported');
+      setUserLocation(ST_ANDREW_CENTER);
+    }
   }, []);
 
   // Fetch ATM data on component mount
@@ -676,38 +492,12 @@ const App = () => {
   if (!userLocation) {
     return (
       <div style={{ height: '100vh', width: '100vw' }} className="bg-gray-50 flex items-center justify-center p-4">
-        <div className="text-center max-w-md">
+        <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
           <h3 className="text-lg font-medium text-gray-900 mb-2">Getting your location...</h3>
-          <p className="text-gray-600 mb-4">
-            Please allow location access when prompted to find nearby ATMs
-          </p>
+          <p className="text-gray-600">Please allow location access to find nearby ATMs</p>
           {locationError && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
-              <p className="text-yellow-800 text-sm mb-2">{locationError}</p>
-              {locationError.includes('HTTPS') && (
-                <div className="text-left">
-                  <p className="text-yellow-700 text-sm font-medium mb-1">Try accessing via:</p>
-                  <p className="text-blue-600 text-sm font-mono bg-white p-2 rounded border">
-                    https://neighbourhood-app.duckdns.org
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-          <button 
-            onClick={() => window.location.reload()}
-            className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors mr-2"
-          >
-            Retry Location Detection
-          </button>
-          {!window.isSecureContext && (
-            <button 
-              onClick={() => window.location.href = window.location.href.replace('http:', 'https:')}
-              className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors"
-            >
-              Switch to HTTPS
-            </button>
+            <p className="text-red-600 text-sm mt-2">Error: {locationError}</p>
           )}
         </div>
       </div>
@@ -737,11 +527,6 @@ const App = () => {
         )}
         {error && atms.length > 0 && (
           <p className="text-xs text-yellow-600 mt-1">Warning: Using cached data - {error}</p>
-        )}
-        {userLocation && (
-          <p className="text-xs text-blue-600 mt-1">
-            Your location: {userLocation.lat.toFixed(4)}, {userLocation.lng.toFixed(4)}
-          </p>
         )}
       </div>
 

@@ -1,4 +1,5 @@
-version: '3.8'
+# version: '3.8'
+# development docker-compose.yml file
 
 services:
   # MySQL Database
@@ -50,6 +51,8 @@ services:
         condition: service_healthy
     networks:
       - neighbourhood_dev_network
+    env_file:
+      - .env
 
   # Frontend
   frontend:
