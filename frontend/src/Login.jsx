@@ -1,69 +1,52 @@
+// Login.jsx - Update your current Login.jsx with this
 import React, { useState } from 'react';
-import { Eye, EyeOff, Mail, Lock, User } from 'lucide-react';
-import Map from './Map';
+import { Eye, EyeOff, Mail, Lock, ArrowLeft } from 'lucide-react';
+import { useAuth } from './AuthContext';
 
-const Login = ({ navigateTo }) => {
-  const [currentPage, setCurrentPage] = useState('login');
-  const [formData, setFormData] = useState({ email: '', password: '' });
+const Login = () => {
+  const { login, navigateTo } = useAuth();
+  const [formData, setFormData] = useState({
+    email: '',
+    password: ''
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  // Add missing state variables for password reset functionality
-  const [showResetPassword, setShowResetPassword] = useState(false);
-  const [resetData, setResetData] = useState({ email: '', new_password: '' });
+
+  const checkFormValidity = () => {
+    const errors = {};
+    if (!formData.email) {
+      errors.email = 'Email is required';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      errors.email = 'Email address is invalid';
+    }
+    if (!formData.password) {
+      errors.password = 'Password is required';
+    }
+    return errors;
+  };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData({ ...formData, [name]: value });
-  };
-
-  // Add missing handler for reset password form
-  const handleResetChange = (e) => {
-    const { name, value } = e.target;
-    setResetData({ ...resetData, [name]: value });
-  };
-
-  const checkFormValidity = () => {
-    const newErrors = {};
-    if (!formData.email) {
-      newErrors.email = 'Email is required';
-    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
-      newErrors.email = 'Email address is invalid';
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+    
+    // Clear field-specific error when user starts typing
+    if (errors[name]) {
+      setErrors(prev => ({
+        ...prev,
+        [name]: ''
+      }));
     }
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    }
-    return newErrors;
-  };
-
-  // Add missing reset password handler
-  const handleResetPassword = async () => {
-    if (!resetData.email || !resetData.new_password) {
-      setErrors({ reset: 'Email and new password are required' });
-      return;
-    }
-
-    try {
-      const response = await fetch('http://127.0.0.1:5000/update_password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(resetData)
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setErrors({ reset: '' });
-        setShowResetPassword(false);
-        setResetData({ email: '', new_password: '' });
-        // Show success message or redirect
-        alert('Password reset successful! Please login with your new password.');
-      } else {
-        setErrors({ reset: data.error || 'Password reset failed' });
-      }
-    } catch (err) {
-      setErrors({ reset: 'Network error. Please try again.' });
+    
+    // Clear submit error when user starts typing
+    if (errors.submit) {
+      setErrors(prev => ({
+        ...prev,
+        submit: ''
+      }));
     }
   };
 
@@ -77,59 +60,39 @@ const Login = ({ navigateTo }) => {
     setErrors({});
 
     try {
-      // Login Request - Changed to POST method
-      const loginRes = await fetch('http://127.0.0.1:5000/login', {
-        method: 'POST', // Changed from GET to POST
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-      });
-
-      const loginData = await loginRes.json();
-
-      if (!loginRes.ok) {
-        setErrors({ submit: loginData.error || 'Login failed.' });
-        setIsSubmitting(false);
-        return;
+      const result = await login(formData.email, formData.password);
+      
+      if (!result.success) {
+        setErrors({ submit: result.error || 'Login failed.' });
       }
-
-      const token = loginData.token;
-      localStorage.setItem('jwtToken', token); // Save token locally
-      console.log('Token saved:', token); // Added console log for debugging
-
-      // Token Verification - Fixed route name and headers
-      const verifyRes = await fetch('http://127.0.0.1:5000/verify-token', {
-        method: 'GET',
-        headers: { 
-          'Authorization': `Bearer ${token}`, // Added Bearer prefix (optional)
-          'Content-Type': 'application/json'
-        }
-      });
-
-      const verifyData = await verifyRes.json();
-
-      if (verifyRes.ok && verifyData.valid) {
-        setCurrentPage('map'); // navigate to homepage
-      } else {
-        setErrors({ submit: 'Invalid or expired token.' });
-        localStorage.removeItem('jwtToken'); // Remove invalid token
-      }
-
+      // If successful, the AuthContext will handle navigation to map
     } catch (err) {
-      console.error('Login error:', err); // Added console log for debugging
+      console.error('Login error:', err);
       setErrors({ submit: 'Network error. Please check your connection and try again.' });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (currentPage === 'map') {
-    return <Map userEmail={formData.email} navigateTo={navigateTo} />;
-  }
+  const handleBackToHome = () => {
+    navigateTo('home');
+  };
+
+  const handleGoToSignup = () => {
+    navigateTo('signup');
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
+          <button
+            onClick={handleBackToHome}
+            className="inline-flex items-center text-gray-600 hover:text-gray-800 mb-4"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Home
+          </button>
           <div className="logo-container">
             <img src="/Neighborhood logo.png" alt="Neighbourhood Logo" className="w-25 h mx-auto" />
           </div>
@@ -138,6 +101,13 @@ const Login = ({ navigateTo }) => {
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8 backdrop-blur-sm bg-opacity-90 space-y-6">
+          {/* General error message */}
+          {errors.submit && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-red-600 text-sm">{errors.submit}</p>
+            </div>
+          )}
+
           {/* Email */}
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
@@ -153,6 +123,7 @@ const Login = ({ navigateTo }) => {
                   errors.email ? 'border-red-500' : 'border-gray-300'
                 }`}
                 placeholder="Enter your email"
+                disabled={isSubmitting}
               />
             </div>
             {errors.email && <p className="mt-1 text-sm text-red-600">{errors.email}</p>}
@@ -173,11 +144,13 @@ const Login = ({ navigateTo }) => {
                   errors.password ? 'border-red-500' : 'border-gray-300'
                 }`}
                 placeholder="Enter your password"
+                disabled={isSubmitting}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                disabled={isSubmitting}
               >
                 {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
               </button>
@@ -185,85 +158,33 @@ const Login = ({ navigateTo }) => {
             {errors.password && <p className="mt-1 text-sm text-red-600">{errors.password}</p>}
           </div>
 
-          {/* Forgot Password Link */}
-          <div className="text-right">
-            <button
-              type="button"
-              onClick={() => setShowResetPassword(!showResetPassword)}
-              className="text-sm text-blue-600 hover:text-blue-800"
-            >
-              Forgot your password?
-            </button>
-          </div>
-
-          {/* Errors */}
-          {errors.submit && <p className="text-sm text-red-600 text-center">{errors.submit}</p>}
-
-          {/* Submit */}
+          {/* Submit Button */}
           <button
             type="submit"
-            className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 ${
+            className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center ${
               isSubmitting ? 'opacity-50 cursor-not-allowed' : ''
             }`}
             disabled={isSubmitting}
           >
-            {isSubmitting ? 'Logging in...' : 'Login'}
+            {isSubmitting ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                Signing In...
+              </>
+            ) : (
+              'Sign In'
+            )}
           </button>
 
-          {/* Password Reset Section */}
-          {showResetPassword && (
-            <div className="mt-4 bg-blue-50 p-4 rounded-lg">
-              <p className="text-sm font-medium text-gray-700 mb-3">Reset your password</p>
-              <div className="space-y-3">
-                <input
-                  type="email"
-                  name="email"
-                  placeholder="Your email"
-                  value={resetData.email}
-                  onChange={handleResetChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <input
-                  type="password"
-                  name="new_password"
-                  placeholder="New password"
-                  value={resetData.new_password}
-                  onChange={handleResetChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <div className="flex space-x-2">
-                  <button
-                    type="button"
-                    onClick={handleResetPassword}
-                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-md transition duration-200"
-                  >
-                    Reset Password
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowResetPassword(false);
-                      setResetData({ email: '', new_password: '' });
-                      setErrors({ ...errors, reset: '' });
-                    }}
-                    className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-700 py-2 rounded-md transition duration-200"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-              {errors.reset && <p className="text-sm text-red-600 mt-2">{errors.reset}</p>}
-            </div>
-          )}
-
-          {/* Signup Link */}
-          <div className="mt-6 text-center">
-            <p className="text-gray-600">
+          {/* Sign Up Link */}
+          <div className="text-center">
+            <p className="text-sm text-gray-600">
               Don't have an account?{' '}
               <button
                 type="button"
-                onClick={() => navigateTo('signup')}
+                onClick={handleGoToSignup}
                 className="text-blue-600 hover:text-blue-800 font-medium"
+                disabled={isSubmitting}
               >
                 Sign up
               </button>

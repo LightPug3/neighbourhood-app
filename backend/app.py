@@ -13,6 +13,23 @@ import smtplib
 from email.message import EmailMessage
 from urllib.parse import unquote
 from dotenv import load_dotenv
+import json
+from sqlalchemy import text
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy.sql import func
+from models import UserPreferences, SessionLocal
+
+# class UserPreferences(Base):
+#     __tablename__ = 'user_preferences'
+    
+#     id = Column(Integer, primary_key=True, autoincrement=True)
+#     user_id = Column(Integer, ForeignKey('users.UserId'), nullable=False)
+#     preferred_banks = Column(Text, nullable=False)  # JSON string
+#     transaction_types = Column(Text, nullable=False)  # JSON string
+#     max_radius_km = Column(Integer, nullable=False, default=10)
+#     preferred_currency = Column(String(10), nullable=False, default='JMD')
+#     created_at = Column(DateTime, default=func.now())
+#     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
 # Load environment variables
 load_dotenv()
@@ -58,29 +75,6 @@ atexit.register(lambda: scheduler.shutdown())
 def generate_otp():
     return f"{random.randint(100000, 999999)}"
 
-# def send_otp_email(receiver_email, otp):
-#     try:
-#         msg = EmailMessage()
-#         msg['Subject'] = "Verify your account - OTP Code"
-#         msg['From'] = EMAIL_ADDRESS
-#         msg['To'] = receiver_email
-#         msg.set_content(f"Welcome to The Neighborhood!\n\nYour 6-digit OTP verification code is: {otp}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, please ignore this email.\n\nBest regards,\nThe Neighborhood Team")
-
-#         # with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-#         #     smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-#         #     smtp.send_message(msg)
-#         # return True
-
-#         server = smtplib.SMTP("smtp.gmail.com", 587)
-#         server.starttls()
-#         server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-#         server.send_message(msg)
-#         server.quit()
-#         return True
-#     except Exception as e:
-#         logger.error(f"Email sending failed: {str(e)}")
-#         return False
-
 def send_otp_email(receiver_email, otp):
     try:
         msg = EmailMessage()
@@ -104,11 +98,12 @@ def send_otp_email(receiver_email, otp):
         logger.error(f"Error type: {type(e).__name__}")
         return False
 
-# Authentication endpoints
-# @app.route('/test', methods=['GET'])
-# def test_connection():
-#     return jsonify({'status': 'Server is running', 'message': 'Connection successful'}), 200
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({'status': 'healthy', 'message': 'API is running'})
 
+# Authentication endpoints
 @app.route('/login', methods=['POST'])
 def login():
     try:
@@ -335,6 +330,7 @@ def resend_otp():
         logger.error(f"Resend OTP error: {str(e)}")
         return jsonify({'error': 'Failed to resend OTP'}), 500
 
+# Replace your existing confirm_otp_code endpoint with this version
 @app.route('/confirm_otp_code/<int:otp>/<string:email>', methods=["GET"])
 def confirm_otp(otp, email):
     logger.info(f"Received OTP verification request - OTP: {otp}, Email: {email}")
@@ -364,7 +360,26 @@ def confirm_otp(otp, email):
                 user.is_verified = True
                 db.commit()
                 
-                return jsonify({"success": "OTP confirmed"}), 200
+                # Generate JWT token for automatic login
+                token = jwt.encode({
+                    "user_id": user.UserId,  # Adjust field name if different
+                    "email": decoded_email,
+                    "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+                }, SECRET_KEY, algorithm=JWT_ALGORITHM)
+                
+                logger.info(f"OTP verified successfully for {decoded_email}, token generated")
+                
+                # Return success with token for automatic authentication
+                return jsonify({
+                    "success": "OTP confirmed",
+                    "message": "Email verified successfully", 
+                    "token": token,
+                    "user": {
+                        "email": user.Email,
+                        "firstName": getattr(user, 'FirstName', None),  # Use getattr in case field doesn't exist
+                        "lastName": getattr(user, 'LastName', None)
+                    }
+                }), 200
             else:
                 logger.warning(f"OTP mismatch - Expected: {user.otp_code}, Received: {otp}")
                 return jsonify({"error": "Invalid OTP"}), 400
@@ -375,12 +390,6 @@ def confirm_otp(otp, email):
     except Exception as e:
         logger.error(f"Unexpected error in confirm_otp: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
-
-# Original ATM endpoints
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'message': 'API is running'})
 
 @app.route('/api/atms', methods=['GET'])
 def get_atms():
@@ -446,6 +455,393 @@ def get_atm_stats():
     except Exception as e:
         logger.error(f"Error fetching ATM stats: {e}")
         return jsonify({'error': 'Failed to fetch ATM statistics'}), 500
+
+# API Endpoint: Save user preferences
+@app.route('/api/user-preferences', methods=['POST'])
+def save_user_preferences():
+    try:
+        # Get token from Authorization header
+        token = request.headers.get("Authorization")
+        logger.debug(f"Received token: {token}")  # Debug line
+        if not token:
+            logger.debug("No token provided")  # Debug line
+            return jsonify({"error": "Authorization token required"}), 401
+            
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
+        
+        logger.debug(f"Token after Bearer removal: {token}")  # Debug line
+
+        # Verify token and get user info
+        try:
+            decoded = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            logger.debug(f"Decoded token: {decoded}")  # Debug line
+            user_id = decoded["user_id"]
+        except jwt.ExpiredSignatureError:
+            logger.debug("Token expired")  # Debug line
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            logger.debug(f"Invalid token error: {str(e)}")  # Debug line
+            return jsonify({"error": "Invalid token"}), 401
+        
+        # Get request data
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        # Validate required fields
+        required_fields = ['preferred_banks', 'transaction_types', 'max_radius_km', 'preferred_currency']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        db = SessionLocal()
+        try:
+            # Check if user preferences already exist
+            existing_preferences = db.query(UserPreferences).filter(UserPreferences.user_id == user_id).first()
+            
+            if existing_preferences:
+                # Update existing preferences
+                existing_preferences.preferred_banks = json.dumps(data['preferred_banks'])
+                existing_preferences.transaction_types = json.dumps(data['transaction_types'])
+                existing_preferences.max_radius_km = data['max_radius_km']
+                existing_preferences.preferred_currency = data['preferred_currency']
+                existing_preferences.updated_at = func.now()
+                
+                logger.info(f"Updated preferences for user {user_id}")
+            else:
+                # Create new preferences
+                new_preferences = UserPreferences(
+                    user_id=user_id,
+                    preferred_banks=json.dumps(data['preferred_banks']),
+                    transaction_types=json.dumps(data['transaction_types']),
+                    max_radius_km=data['max_radius_km'],
+                    preferred_currency=data['preferred_currency']
+                )
+                db.add(new_preferences)
+                logger.info(f"Created new preferences for user {user_id}")
+            
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "User preferences saved successfully"
+            }), 200
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error saving user preferences: {str(e)}")
+        return jsonify({"error": "Failed to save preferences"}), 500
+
+# API Endpoint: Get user preferences
+@app.route('/api/user-preferences', methods=['GET'])
+def get_user_preferences():
+    try:
+        # Get token from Authorization header
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Authorization token required"}), 401
+            
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
+        
+        # Verify token and get user info
+        try:
+            decoded = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            user_id = decoded["user_id"]
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
+        
+        db = SessionLocal()
+        try:
+            preferences = db.query(UserPreferences).filter(UserPreferences.user_id == user_id).first()
+            
+            if not preferences:
+                return jsonify({"error": "No preferences found for user"}), 404
+            
+            return jsonify({
+                "preferred_banks": json.loads(preferences.preferred_banks),
+                "transaction_types": json.loads(preferences.transaction_types),
+                "max_radius_km": preferences.max_radius_km,
+                "preferred_currency": preferences.preferred_currency,
+                "created_at": preferences.created_at.isoformat(),
+                "updated_at": preferences.updated_at.isoformat()
+            }), 200
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error getting user preferences: {str(e)}")
+        return jsonify({"error": "Failed to get preferences"}), 500
+
+# API Endpoint: Get filtered ATMs based on user preferences
+@app.route('/api/atms/filtered', methods=['GET'])
+def get_filtered_atms():
+    try:
+        # Get token from Authorization header
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Authorization token required"}), 401
+            
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
+        
+        # Verify token and get user info
+        try:
+            decoded = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            user_id = decoded["user_id"]
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
+        
+        # Get user location from query parameters
+        user_lat = request.args.get('lat', type=float)
+        user_lng = request.args.get('lng', type=float)
+        
+        db = SessionLocal()
+        try:
+            # Get user preferences
+            preferences = db.query(UserPreferences).filter(UserPreferences.user_id == user_id).first()
+            
+            if not preferences:
+                # If no preferences, return all ATMs
+                logger.info(f"No preferences found for user {user_id}, returning all ATMs")
+                atms = db.query(ATM).all()
+            else:
+                # Get all ATMs
+                atms = db.query(ATM).all()
+                
+                # Filter ATMs based on preferences
+                atms = filter_atms_by_preferences(atms, preferences, user_lat, user_lng)
+            
+            # Convert to API format (same as your existing /api/atms endpoint)
+            atm_list = []
+            for atm in atms:
+                bank = get_bank_from_location(atm.location)
+                
+                atm_data = {
+                    "id": atm.id,
+                    "address": f"{atm.location}, {atm.parish}",
+                    "bank": bank,
+                    "bankName": f"{bank} Bank" if bank != "Unknown" else "Unknown Bank",
+                    "depositFee": 75,  # You might want to make this dynamic
+                    "functional": atm.status == "WORKING",
+                    "geocodingFailed": bool(atm.geocoding_failed),
+                    "lastUpdated": atm.updated_at.isoformat() if atm.updated_at else None,
+                    "lat": float(atm.latitude) if atm.latitude else None,
+                    "lng": float(atm.longitude) if atm.longitude else None,
+                    "location": atm.location,
+                    "lowOnCash": False,  # You might want to make this dynamic
+                    "parish": atm.parish,
+                    "supportsCurrency": "JMD",  # Default as per your requirement
+                    "type": "ATM",
+                    "withdrawalFee": 150,  # You might want to make this dynamic
+                    "supportsDeposit": bool(atm.deposit_available),
+                    "supportsWithdrawal": True  # All ATMs support withdrawal
+                }
+                
+                # Add distance if user location provided
+                if user_lat and user_lng and atm.latitude and atm.longitude:
+                    try:
+                        distance = calculate_distance(user_lat, user_lng, float(atm.latitude), float(atm.longitude))
+                        atm_data["distance"] = round(distance, 2)
+                    except (ValueError, TypeError):
+                        pass
+                
+                atm_list.append(atm_data)
+            
+            # Sort by distance if available
+            if user_lat and user_lng:
+                atm_list.sort(key=lambda x: x.get('distance', float('inf')))
+            
+            logger.info(f"Returning {len(atm_list)} filtered ATMs for user {user_id}")
+            return jsonify(atm_list), 200
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error getting filtered ATMs: {str(e)}")
+        return jsonify({"error": "Failed to get filtered ATMs"}), 500
+
+
+# Helper function to extract bank from location prefix
+def get_bank_from_location(location):
+    """Extract bank name from location prefix"""
+    if not location:
+        return 'Unknown'
+    
+    location_lower = location.lower()
+    if location_lower.startswith('sbj_'):
+        return 'Sagicor'
+    elif location_lower.startswith('ncb_'):
+        return 'NCB'
+    elif location_lower.startswith('scotia_'):
+        return 'Scotia'
+    elif location_lower.startswith('jmmb_'):
+        return 'JMMB'
+    elif location_lower.startswith('cibc_'):
+        return 'CIBC'
+    else:
+        return 'Unknown'
+
+# Helper function to calculate distance between two points
+def calculate_distance(lat1, lng1, lat2, lng2):
+    """Calculate distance between two points in kilometers using Haversine formula"""
+    import math
+    
+    R = 6371  # Earth's radius in kilometers
+    
+    # Convert latitude and longitude from degrees to radians
+    lat1_rad = math.radians(lat1)
+    lng1_rad = math.radians(lng1)
+    lat2_rad = math.radians(lat2)
+    lng2_rad = math.radians(lng2)
+    
+    # Differences
+    dlat = lat2_rad - lat1_rad
+    dlng = lng2_rad - lng1_rad
+    
+    # Haversine formula
+    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlng/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    
+    return R * c
+
+# Helper function to filter ATMs based on user preferences
+def filter_atms_by_preferences(atms, preferences, user_lat=None, user_lng=None):
+    """Filter ATMs based on user preferences with fallback logic"""
+    
+    if not atms:
+        return []
+    
+    try:
+        preferred_banks = json.loads(preferences.preferred_banks) if isinstance(preferences.preferred_banks, str) else preferences.preferred_banks
+        transaction_types = json.loads(preferences.transaction_types) if isinstance(preferences.transaction_types, str) else preferences.transaction_types
+    except (json.JSONDecodeError, AttributeError):
+        logger.error("Error parsing user preferences JSON")
+        return atms  # Return all ATMs if parsing fails
+    
+    max_radius = preferences.max_radius_km
+    preferred_currency = preferences.preferred_currency
+    
+    # Helper function to check if ATM matches transaction requirements
+    def matches_transaction_requirements(atm, transaction_types):
+        if 'both' in transaction_types:
+            return True
+        
+        supports_withdrawal = True  # All ATMs support withdrawal
+        supports_deposit = atm.deposit_available == 1
+        
+        if 'withdrawal' in transaction_types and 'deposit' in transaction_types:
+            return True
+        elif 'withdrawal' in transaction_types:
+            return supports_withdrawal
+        elif 'deposit' in transaction_types:
+            return supports_deposit
+        
+        return True
+    
+    # Helper function to check if ATM is within radius
+    def within_radius(atm, user_lat, user_lng, max_radius):
+        if not user_lat or not user_lng or not atm.latitude or not atm.longitude:
+            return True  # Include if we can't calculate distance
+        
+        try:
+            distance = calculate_distance(user_lat, user_lng, float(atm.latitude), float(atm.longitude))
+            return distance <= max_radius
+        except (ValueError, TypeError):
+            return True
+    
+    # Filter with priority fallback logic
+    filtered_results = []
+    
+    # Priority 1: Exact match (Bank + Transaction + Radius + Currency)
+    if user_lat and user_lng:
+        for atm in atms:
+            bank = get_bank_from_location(atm.location)
+            
+            # Check bank preference
+            bank_match = 'Any' in preferred_banks or bank in preferred_banks
+            
+            # Check transaction requirements
+            transaction_match = matches_transaction_requirements(atm, transaction_types)
+            
+            # Check radius
+            radius_match = within_radius(atm, user_lat, user_lng, max_radius)
+            
+            # Check currency (currently all ATMs are JMD)
+            currency_match = preferred_currency == 'JMD'  # Since all are JMD for now
+            
+            if bank_match and transaction_match and radius_match and currency_match:
+                filtered_results.append(atm)
+        
+        if filtered_results:
+            logger.info(f"Found {len(filtered_results)} ATMs with exact match")
+            return filtered_results
+    
+    # Priority 2: Bank + Radius (ignore transaction type)
+    if user_lat and user_lng:
+        for atm in atms:
+            bank = get_bank_from_location(atm.location)
+            bank_match = 'Any' in preferred_banks or bank in preferred_banks
+            radius_match = within_radius(atm, user_lat, user_lng, max_radius)
+            
+            if bank_match and radius_match:
+                filtered_results.append(atm)
+        
+        if filtered_results:
+            logger.info(f"Found {len(filtered_results)} ATMs with bank + radius match")
+            return filtered_results
+    
+    # Priority 3: Bank + Transaction (ignore radius)
+    for atm in atms:
+        bank = get_bank_from_location(atm.location)
+        bank_match = 'Any' in preferred_banks or bank in preferred_banks
+        transaction_match = matches_transaction_requirements(atm, transaction_types)
+        
+        if bank_match and transaction_match:
+            filtered_results.append(atm)
+    
+    if filtered_results:
+        logger.info(f"Found {len(filtered_results)} ATMs with bank + transaction match")
+        return filtered_results
+    
+    # Priority 4: Bank only
+    for atm in atms:
+        bank = get_bank_from_location(atm.location)
+        bank_match = 'Any' in preferred_banks or bank in preferred_banks
+        
+        if bank_match:
+            filtered_results.append(atm)
+    
+    if filtered_results:
+        logger.info(f"Found {len(filtered_results)} ATMs with bank match only")
+        return filtered_results
+    
+    # Priority 5: Radius only (if user location available)
+    if user_lat and user_lng:
+        for atm in atms:
+            if within_radius(atm, user_lat, user_lng, max_radius):
+                filtered_results.append(atm)
+        
+        if filtered_results:
+            logger.info(f"Found {len(filtered_results)} ATMs within radius")
+            return filtered_results
+    
+    # Fallback: Return all ATMs
+    logger.info(f"No matches found, returning all {len(atms)} ATMs")
+    return atms
+
 
 # Helper functions for ATM data
 def map_location_to_bank(location):

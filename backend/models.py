@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
@@ -64,6 +64,52 @@ class GeocodingFailure(Base):
     retry_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class UserPreferences(Base):
+    """
+    User preferences for ATM filtering
+    Stores user's questionnaire responses for personalized ATM recommendations
+    """
+    __tablename__ = 'user_preferences'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.UserId', ondelete='CASCADE'), nullable=False, unique=True)
+    preferred_banks = Column(Text, nullable=False, comment='JSON array of preferred banks')
+    transaction_types = Column(Text, nullable=False, comment='JSON array of transaction types')
+    max_radius_km = Column(Integer, nullable=False, default=10, comment='Maximum travel radius in kilometers')
+    preferred_currency = Column(String(10), nullable=False, default='JMD', comment='Preferred currency')
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    
+    def __repr__(self):
+        return f"<UserPreferences(user_id={self.user_id}, banks={self.preferred_banks})>"
+    
+    def to_dict(self):
+        """Convert to dictionary for JSON serialization"""
+        import json
+        try:
+            return {
+                'id': self.id,
+                'user_id': self.user_id,
+                'preferred_banks': json.loads(self.preferred_banks) if isinstance(self.preferred_banks, str) else self.preferred_banks,
+                'transaction_types': json.loads(self.transaction_types) if isinstance(self.transaction_types, str) else self.transaction_types,
+                'max_radius_km': self.max_radius_km,
+                'preferred_currency': self.preferred_currency,
+                'created_at': self.created_at.isoformat() if self.created_at else None,
+                'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            }
+        except json.JSONDecodeError:
+            # Fallback if JSON parsing fails
+            return {
+                'id': self.id,
+                'user_id': self.user_id,
+                'preferred_banks': [],
+                'transaction_types': [],
+                'max_radius_km': self.max_radius_km,
+                'preferred_currency': self.preferred_currency,
+                'created_at': self.created_at.isoformat() if self.created_at else None,
+                'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            }
 
 def create_tables():
     """Create all tables"""
