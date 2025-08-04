@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
 from sqlalchemy.sql import func
 from models import UserPreferences, SessionLocal
+from recommendation import get_atm_recommendations_for_user
 
 # class UserPreferences(Base):
 #     __tablename__ = 'user_preferences'
@@ -673,6 +674,192 @@ def get_filtered_atms():
         logger.error(f"Error getting filtered ATMs: {str(e)}")
         return jsonify({"error": "Failed to get filtered ATMs"}), 500
 
+@app.route('/api/recommendations', methods=['GET'])
+def get_recommendations():
+    """
+    Get personalized ATM recommendations for the authenticated user
+    
+    Query Parameters:
+    - lat (float): User's current latitude
+    - lng (float): User's current longitude
+    
+    Returns:
+    - JSON object with top 3 ATM recommendations
+    """
+    try:
+        # Verify authentication
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({"error": "Authorization token required"}), 401
+        
+        # Remove 'Bearer ' prefix if present
+        if token.startswith('Bearer '):
+            token = token[7:]
+        
+        # Verify token and get user info
+        try:
+            decoded = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            user_id = decoded["user_id"]
+        except jwt.ExpiredSignatureError:
+            return jsonify({"error": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"error": "Invalid token"}), 401
+        
+        # Get user location from query parameters
+        user_lat = request.args.get('lat', type=float)
+        user_lng = request.args.get('lng', type=float)
+        
+        if not user_lat or not user_lng:
+            return jsonify({
+                "error": "User location required",
+                "message": "Please provide lat and lng query parameters"
+            }), 400
+        
+        # Validate coordinates
+        if not (-90 <= user_lat <= 90) or not (-180 <= user_lng <= 180):
+            return jsonify({
+                "error": "Invalid coordinates",
+                "message": "Latitude must be between -90 and 90, longitude between -180 and 180"
+            }), 400
+        
+        logger.info(f"Generating recommendations for user {user_id} at location ({user_lat}, {user_lng})")
+        
+        # Get recommendations
+        recommendations = get_atm_recommendations_for_user(user_id, user_lat, user_lng)
+        
+        if not recommendations:
+            return jsonify({
+                "recommendations": [],
+                "count": 0,
+                "message": "No ATM recommendations found for your location and preferences",
+                "timestamp": datetime.datetime.now().isoformat()
+            }), 200
+        
+        # Calculate some additional stats
+        avg_distance = sum(rec['distance_km'] for rec in recommendations) / len(recommendations)
+        best_score = max(rec['recommendation_score'] for rec in recommendations)
+        
+        response_data = {
+            "recommendations": recommendations,
+            "count": len(recommendations),
+            "stats": {
+                "average_distance_km": round(avg_distance, 2),
+                "best_score": round(best_score, 3),
+                "recommendation_radius_km": max(rec['distance_km'] for rec in recommendations) if recommendations else 0
+            },
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+        
+        logger.info(f"Successfully generated {len(recommendations)} recommendations for user {user_id}")
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in recommendations endpoint: {e}")
+        return jsonify({
+            "error": "Failed to generate recommendations",
+            "message": "An internal error occurred while generating your recommendations"
+        }), 500
+
+
+@app.route('/api/recommendations/debug', methods=['GET'])
+def debug_recommendations():
+    """
+    Debug endpoint to see detailed recommendation scoring
+    Only use in development/testing
+    """
+    if app.config['ENV'] == 'production':
+        return jsonify({"error": "Debug endpoint not available in production"}), 404
+    
+    try:
+        # Verify authentication
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({"error": "Authorization token required"}), 401
+        
+        if token.startswith('Bearer '):
+            token = token[7:]
+        
+        try:
+            decoded = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            user_id = decoded["user_id"]
+        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+            return jsonify({"error": "Invalid or expired token"}), 401
+        
+        # Get user location
+        user_lat = request.args.get('lat', type=float)
+        user_lng = request.args.get('lng', type=float)
+        
+        if not user_lat or not user_lng:
+            return jsonify({"error": "User location (lat, lng) required"}), 400
+        
+        # Get detailed recommendations with debug info
+        from recommendation import ATMRecommendationEngine
+        engine = ATMRecommendationEngine()
+        
+        db = SessionLocal()
+        try:
+            # Get user preferences
+            preferences = db.query(UserPreferences).filter(
+                UserPreferences.user_id == user_id
+            ).first()
+            
+            if not preferences:
+                return jsonify({"error": "No user preferences found"}), 404
+            
+            # Get all ATMs for debugging
+            atms = db.query(ATM).filter(
+                and_(
+                    ATM.latitude.isnot(None),
+                    ATM.longitude.isnot(None),
+                    ATM.geocoding_failed == False
+                )
+            ).limit(20).all()  # Limit for debug purposes
+            
+            debug_data = []
+            for atm in atms:
+                try:
+                    scores = engine.calculate_atm_score(atm, user_lat, user_lng, preferences)
+                    distance_km = engine.haversine_distance(
+                        user_lat, user_lng, 
+                        float(atm.latitude), float(atm.longitude)
+                    )
+                    
+                    debug_info = {
+                        'atm_id': atm.id,
+                        'location': atm.location,
+                        'distance_km': round(distance_km, 2),
+                        'bank': engine.get_bank_from_location(atm.location),
+                        'status': atm.status,
+                        'deposit_available': bool(atm.deposit_available),
+                        'last_used': atm.last_used,
+                        'scores': scores,
+                        'coordinates': {
+                            'lat': float(atm.latitude),
+                            'lng': float(atm.longitude)
+                        }
+                    }
+                    debug_data.append(debug_info)
+                except Exception as e:
+                    logger.warning(f"Error debugging ATM {atm.id}: {e}")
+            
+            # Sort by total score
+            debug_data.sort(key=lambda x: x['scores']['total_score'], reverse=True)
+            
+            return jsonify({
+                "debug_data": debug_data,
+                "user_preferences": preferences.to_dict(),
+                "user_location": {"lat": user_lat, "lng": user_lng},
+                "scoring_weights": engine.WEIGHTS,
+                "timestamp": datetime.datetime.now().isoformat()
+            }), 200
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Error in debug recommendations endpoint: {e}")
+        return jsonify({"error": "Debug failed", "message": str(e)}), 500
 
 # Helper function to extract bank from location prefix
 def get_bank_from_location(location):
